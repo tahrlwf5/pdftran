@@ -2,115 +2,148 @@ import os
 import logging
 from tempfile import NamedTemporaryFile
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler,
+)
 from PyPDF2 import PdfReader, PdfWriter
 
-TOKEN = os.environ.get('BOT_TOKEN')
+# إعدادات البوت
+TOKEN = os.environ.get("BOT_TOKEN")
+
+# تعريف الحالات
+MAIN_PDF, PAGE_PDF, POSITION = range(3)
+
+# تخزين البيانات المؤقتة
 USER_DATA = {}
 
+# بدء المحادثة
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "مرحبًا! أرسل ملف PDF الرئيسي أولاً، ثم أرسل الصفحة المُراد إضافتها،"
-        "وأخيرًا أرسل رقم الموضع (مثال: 2)"
+        "مرحبًا! أرسل ملف PDF الرئيسي أولاً."
     )
+    return MAIN_PDF
 
+# معالجة الملف الرئيسي
 async def handle_main_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     document = update.message.document
-    
-    if document.mime_type != 'application/pdf':
+
+    if document.mime_type != "application/pdf":
         await update.message.reply_text("يرجى إرسال ملف PDF فقط!")
-        return
-    
+        return MAIN_PDF
+
+    # حفظ الملف الرئيسي
     file = await document.get_file()
     with NamedTemporaryFile(delete=False, suffix=".pdf") as temp:
         await file.download_to_memory(temp)
-        USER_DATA[user_id] = {
-            'main_pdf': temp.name,
-            'page_to_add': None,
-            'position': None
-        }
-    
-    await update.message.reply_text("تم استلام PDF الرئيسي. الآن أرسل الصفحة المُراد إضافتها.")
+        USER_DATA[user_id] = {"main_pdf": temp.name}
 
+    await update.message.reply_text("تم استلام الملف الرئيسي. الآن أرسل الصفحة المُراد إضافتها.")
+    return PAGE_PDF
+
+# معالجة صفحة الإضافة
 async def handle_page_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     document = update.message.document
-    
-    if user_id not in USER_DATA:
-        await update.message.reply_text("أرسل الملف الرئيسي أولاً!")
-        return
-    
-    if document.mime_type != 'application/pdf':
+
+    if document.mime_type != "application/pdf":
         await update.message.reply_text("يرجى إرسال ملف PDF فقط!")
-        return
-    
+        return PAGE_PDF
+
+    # حفظ صفحة الإضافة
     file = await document.get_file()
     with NamedTemporaryFile(delete=False, suffix=".pdf") as temp:
         await file.download_to_memory(temp)
-        USER_DATA[user_id]['page_to_add'] = temp.name
-    
-    await update.message.reply_text("تم استلام الصفحة. الآن أرسل رقم الموضع (مثال: 3)")
+        USER_DATA[user_id]["page_to_add"] = temp.name
 
+    await update.message.reply_text("تم استلام الصفحة. الآن أرسل رقم الموضع (مثال: 2).")
+    return POSITION
+
+# معالجة رقم الموضع
 async def handle_position(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text
-    
+
     if not text.isdigit():
         await update.message.reply_text("يرجى إرسال رقم صحيح فقط!")
-        return
-    
-    position = int(text) - 1  # Convert to 0-based index
-    USER_DATA[user_id]['position'] = position
-    
+        return POSITION
+
+    position = int(text) - 1  # تحويل إلى فهرس يبدأ من الصفر
+
     try:
-        # معالجة الPDF
-        main_pdf = PdfReader(USER_DATA[user_id]['main_pdf'])
-        page_pdf = PdfReader(USER_DATA[user_id]['page_to_add'])
+        # قراءة الملفات
+        main_pdf = PdfReader(USER_DATA[user_id]["main_pdf"])
+        page_pdf = PdfReader(USER_DATA[user_id]["page_to_add"])
+
+        # إنشاء ملف جديد
         writer = PdfWriter()
-        
+
         # إضافة الصفحات حتى الموضع المحدد
         for i in range(position):
             writer.add_page(main_pdf.pages[i])
-        
+
         # إضافة الصفحة الجديدة
         writer.add_page(page_pdf.pages[0])
-        
-        # إضافة باقي الصفحات
+
+        # إضافة بقية الصفحات
         for i in range(position, len(main_pdf.pages)):
             writer.add_page(main_pdf.pages[i])
-        
-        # حفظ الناتج
+
+        # حفظ الملف النهائي
         with NamedTemporaryFile(suffix=".pdf") as output_temp:
-            with open(output_temp.name, 'wb') as f:
+            with open(output_temp.name, "wb") as f:
                 writer.write(f)
-            
-            await update.message.reply_document(document=open(output_temp.name, 'rb'))
-        
-        # تنظيف الملفات
-        os.unlink(USER_DATA[user_id]['main_pdf'])
-        os.unlink(USER_DATA[user_id]['page_to_add'])
-        del USER_DATA[user_id]
-        
+
+            # إرسال الملف للمستخدم
+            await update.message.reply_document(document=open(output_temp.name, "rb"))
+
     except Exception as e:
         await update.message.reply_text(f"حدث خطأ: {str(e)}")
         logging.error(e)
 
-if __name__ == '__main__':
+    finally:
+        # تنظيف الملفات المؤقتة
+        if user_id in USER_DATA:
+            if "main_pdf" in USER_DATA[user_id]:
+                os.unlink(USER_DATA[user_id]["main_pdf"])
+            if "page_to_add" in USER_DATA[user_id]:
+                os.unlink(USER_DATA[user_id]["page_to_add"])
+            del USER_DATA[user_id]
+
+    return ConversationHandler.END
+
+# إلغاء المحادثة
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id in USER_DATA:
+        if "main_pdf" in USER_DATA[user_id]:
+            os.unlink(USER_DATA[user_id]["main_pdf"])
+        if "page_to_add" in USER_DATA[user_id]:
+            os.unlink(USER_DATA[user_id]["page_to_add"])
+        del USER_DATA[user_id]
+
+    await update.message.reply_text("تم إلغاء العملية.")
+    return ConversationHandler.END
+
+# تشغيل البوت
+if __name__ == "__main__":
     application = Application.builder().token(TOKEN).build()
-    
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(MessageHandler(
-        filters.Document.PDF & ~filters.COMMAND, 
-        handle_main_pdf
-    ))
-    application.add_handler(MessageHandler(
-        filters.Document.PDF & filters.User(USER_DATA.keys()),
-        handle_page_pdf
-    ))
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_position
-    ))
-    
+
+    # تعريف ConversationHandler
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            MAIN_PDF: [MessageHandler(filters.Document.PDF, handle_main_pdf)],
+            PAGE_PDF: [MessageHandler(filters.Document.PDF, handle_page_pdf)],
+            POSITION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_position)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    application.add_handler(conv_handler)
     application.run_polling()
