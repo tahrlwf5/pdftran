@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from PyPDF2 import PdfReader, PdfWriter
 
-TOKEN = os.environ.get('BOT_TOKEN')
+TOKEN = os.environ.get('6334414905:AAE8vd9W6_s3VemxX261CiqY9cxT04LkWg4')
 USER_DATA = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
